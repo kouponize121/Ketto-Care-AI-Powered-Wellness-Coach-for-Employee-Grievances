@@ -140,33 +140,43 @@ def load_openai_config():
     """Load OpenAI API key from database first, then fallback to environment variable"""
     try:
         db = SessionLocal()
-        config = db.query(GPTConfig).filter(GPTConfig.is_active == True).first()
-        db.close()
-        
-        if config and config.api_key:
-            openai.api_key = config.api_key
-            logging.info("OpenAI API key loaded from database configuration")
-            return config.api_key
-        else:
-            # Fallback to environment variable
-            openai_api_key = os.environ.get('OPENAI_API_KEY')
-            if openai_api_key:
-                openai.api_key = openai_api_key
-                logging.info("OpenAI API key loaded from environment variable")
-                return openai_api_key
+        try:
+            config = db.query(GPTConfig).filter(GPTConfig.is_active == True).first()
+            
+            if config and config.api_key:
+                openai.api_key = config.api_key
+                logging.info(f"✅ OpenAI API key loaded from database configuration (ends with: ...{config.api_key[-8:]})")
+                return config.api_key
             else:
-                logging.warning("No OpenAI API key found in database or environment")
-                return None
+                # Fallback to environment variable
+                openai_api_key = os.environ.get('OPENAI_API_KEY')
+                if openai_api_key:
+                    openai.api_key = openai_api_key
+                    logging.info("✅ OpenAI API key loaded from environment variable")
+                    return openai_api_key
+                else:
+                    logging.warning("⚠️ No OpenAI API key found in database or environment")
+                    return None
+        finally:
+            db.close()
     except Exception as e:
-        logging.error(f"Error loading OpenAI config: {str(e)}")
+        logging.error(f"❌ Error loading OpenAI config: {str(e)}")
         # Fallback to environment variable
         openai_api_key = os.environ.get('OPENAI_API_KEY')
         if openai_api_key:
             openai.api_key = openai_api_key
-            logging.info("OpenAI API key loaded from environment variable (fallback)")
+            logging.info("✅ OpenAI API key loaded from environment variable (fallback)")
         return openai_api_key
 
+# Function to get current API key
+def get_current_openai_key():
+    """Get the current OpenAI API key, loading from database if not set"""
+    if not openai.api_key:
+        load_openai_config()
+    return openai.api_key
+
 # Initialize OpenAI configuration
+logging.info("🔧 Initializing OpenAI configuration...")
 load_openai_config()
 
 # Security setup
