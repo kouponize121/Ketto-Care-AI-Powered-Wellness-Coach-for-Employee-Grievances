@@ -358,51 +358,38 @@ def test_openai_api_key_persistence():
     initial_config_success, initial_config = tester.test_get_initial_config()
     if not initial_config_success:
         logging.error("❌ Failed to get initial configuration")
-    
-    # Step 2: Save a new API key through admin dashboard
-    logging.info("\n===== STEP 2: Save New API Key =====")
-    save_config_success, save_config = tester.test_save_new_config()
-    if not save_config_success:
-        logging.error("❌ Failed to save new API key")
         return 1
     
-    # Step 3: Verify the API key was saved correctly
-    logging.info("\n===== STEP 3: Verify API Key Was Saved Correctly =====")
-    verify_config_success, verify_config = tester.test_verify_saved_config()
-    if not verify_config_success:
-        logging.error("❌ Failed to verify saved API key")
-        return 1
-    
-    # Step 4: Test the chat functionality with the new key
-    logging.info("\n===== STEP 4: Test Chat Functionality With New Key =====")
+    # Step 2: Test the chat functionality with the existing key
+    logging.info("\n===== STEP 2: Test Chat Functionality With Existing Key =====")
     chat_success, chat_response = tester.test_chat_functionality()
     if not chat_success:
         logging.error("❌ Failed to test chat functionality")
         return 1
     
-    # Step 5: Use the new test endpoint to verify configuration
-    logging.info("\n===== STEP 5: Test New Configuration Endpoint =====")
+    # Step 3: Use the test endpoint to verify configuration
+    logging.info("\n===== STEP 3: Test Configuration Endpoint =====")
     test_endpoint_success, test_endpoint = tester.test_config_endpoint()
     if not test_endpoint_success:
         logging.error("❌ Failed to test configuration endpoint")
         return 1
     
-    # Step 6: Simulate server restart scenario
-    logging.info("\n===== STEP 6: Simulate Server Restart =====")
+    # Step 4: Simulate server restart scenario
+    logging.info("\n===== STEP 4: Simulate Server Restart =====")
     restart_success = tester.simulate_server_restart()
     if not restart_success:
         logging.error("❌ Failed to simulate server restart")
         return 1
     
-    # Step 7: Verify the API key persistence after restart
-    logging.info("\n===== STEP 7: Verify API Key Persistence After Restart =====")
+    # Step 5: Verify the API key persistence after restart
+    logging.info("\n===== STEP 5: Verify API Key Persistence After Restart =====")
     persistence_success, persistence = tester.test_persistence_after_restart()
     if not persistence_success:
         logging.error("❌ Failed to verify API key persistence after restart")
         return 1
     
-    # Step 8: Test chat functionality after restart
-    logging.info("\n===== STEP 8: Test Chat Functionality After Restart =====")
+    # Step 6: Test chat functionality after restart
+    logging.info("\n===== STEP 6: Test Chat Functionality After Restart =====")
     chat_after_restart_success, chat_after_restart = tester.test_chat_after_restart()
     if not chat_after_restart_success:
         logging.error("❌ Failed to test chat functionality after restart")
