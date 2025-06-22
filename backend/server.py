@@ -293,6 +293,10 @@ async def get_admin_user(current_user: User = Depends(get_current_user)):
 async def chat_with_ai(message: str, user_id: str, db: Session) -> dict:
     """Process chat with CareAI and determine if ticket creation is needed"""
     try:
+        # Ensure OpenAI API key is loaded
+        if not openai.api_key:
+            load_openai_config()
+        
         # Get user info for context
         user = db.query(User).filter(User.id == user_id).first()
         user_name = user.name if user else "User"
