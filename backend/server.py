@@ -1314,19 +1314,24 @@ async def get_email_config(current_user: User = Depends(get_admin_user), db: Ses
 
 @api_router.post("/admin/gpt-config")
 async def save_gpt_config(config: GPTConfigModel, current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
-    # Set the API key for immediate use
-    openai.api_key = config.api_key
-    
-    # Test the API key
+    """Save and test OpenAI API key configuration"""
     try:
+        # Set the API key for immediate testing
+        openai.api_key = config.api_key
+        logging.info(f"🔧 Testing new OpenAI API key (ends with: ...{config.api_key[-8:]})")
+        
+        # Test the API key
         test_response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, this is a test."}],
             max_tokens=10
         )
         
+        logging.info("✅ OpenAI API key test successful")
+        
         # Delete existing config
-        db.query(GPTConfig).delete()
+        deleted_count = db.query(GPTConfig).delete()
+        logging.info(f"🗑️ Deleted {deleted_count} existing GPT configurations")
         
         # Create new config
         gpt_config = GPTConfig(
@@ -1336,10 +1341,24 @@ async def save_gpt_config(config: GPTConfigModel, current_user: User = Depends(g
         )
         db.add(gpt_config)
         db.commit()
+        db.refresh(gpt_config)
         
-        logging.info("OpenAI API key updated and saved to database")
-        return {"message": "GPT configuration saved and tested successfully"}
+        logging.info(f"💾 OpenAI API key saved to database with ID: {gpt_config.id}")
+        
+        # Verify the key was saved by reloading
+        load_openai_config()
+        
+        return {
+            "message": "GPT configuration saved and tested successfully",
+            "api_key_preview": config.api_key[:10] + "..." if len(config.api_key) > 10 else config.api_key,
+            "is_active": True,
+            "last_tested_at": gpt_config.last_tested_at.isoformat()
+        }
+        
     except Exception as e:
+        logging.error(f"❌ Failed to save/test OpenAI API key: {str(e)}")
+        # Restore previous configuration if possible
+        load_openai_config()
         raise HTTPException(status_code=400, detail=f"Invalid API key: {str(e)}")
 
 @api_router.get("/admin/gpt-config")
