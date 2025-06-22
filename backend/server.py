@@ -317,8 +317,18 @@ async def chat_with_ai(message: str, user_id: str, db: Session) -> dict:
     """Process chat with CareAI and determine if ticket creation is needed"""
     try:
         # Ensure OpenAI API key is loaded
-        if not openai.api_key:
-            load_openai_config()
+        current_key = get_current_openai_key()
+        if not current_key:
+            logging.error("❌ No OpenAI API key available for chat")
+            return {
+                "response": "I apologize, but I'm experiencing technical difficulties. Please contact your administrator to configure the AI system.",
+                "escalate": True,
+                "category": "request",
+                "severity": "medium",
+                "summary": "Technical support needed - AI system not configured",
+                "show_resolution_buttons": False,
+                "conversation_id": None
+            }
         
         # Get user info for context
         user = db.query(User).filter(User.id == user_id).first()
