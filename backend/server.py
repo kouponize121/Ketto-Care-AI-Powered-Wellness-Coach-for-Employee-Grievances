@@ -188,6 +188,19 @@ JWT_SECRET = os.environ.get('JWT_SECRET_KEY', 'your-secret-key')
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+# Startup event to load OpenAI configuration
+@app.on_event("startup")
+async def startup_event():
+    """Load configuration on app startup"""
+    logging.info("🚀 Starting Ketto Care application...")
+    logging.info("🔧 Loading OpenAI configuration on startup...")
+    api_key = load_openai_config()
+    if api_key:
+        logging.info("✅ OpenAI configuration loaded successfully on startup")
+    else:
+        logging.warning("⚠️ No OpenAI API key available on startup")
+    logging.info("🎉 Ketto Care application started successfully")
+
 # Dependency to get DB session
 def get_db():
     db = SessionLocal()
