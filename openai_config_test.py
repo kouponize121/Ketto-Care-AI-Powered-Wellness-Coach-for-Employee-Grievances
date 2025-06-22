@@ -70,6 +70,9 @@ class OpenAIConfigTester:
 
     def test_admin_login(self, email="admin@ketto.org", password="admin123"):
         """Test admin login"""
+        # First try to initialize admin
+        self.test_init_admin()
+        
         success, response = self.run_test(
             "Admin Login",
             "POST",
