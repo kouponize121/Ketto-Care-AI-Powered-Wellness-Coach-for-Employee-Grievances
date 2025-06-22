@@ -1281,6 +1281,7 @@ async def get_email_config(current_user: User = Depends(get_admin_user), db: Ses
 
 @api_router.post("/admin/gpt-config")
 async def save_gpt_config(config: GPTConfigModel, current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+    # Set the API key for immediate use
     openai.api_key = config.api_key
     
     # Test the API key
@@ -1303,6 +1304,7 @@ async def save_gpt_config(config: GPTConfigModel, current_user: User = Depends(g
         db.add(gpt_config)
         db.commit()
         
+        logging.info("OpenAI API key updated and saved to database")
         return {"message": "GPT configuration saved and tested successfully"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid API key: {str(e)}")
