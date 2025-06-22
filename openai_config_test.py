@@ -81,6 +81,21 @@ class OpenAIConfigTester:
             self.admin_token = response['access_token']
             logging.info(f"Admin login successful, token obtained")
             return True
+        
+        # Try with alternative credentials
+        logging.warning("First login attempt failed, trying alternative credentials")
+        success, response = self.run_test(
+            "Admin Login (Alternative)",
+            "POST",
+            "api/auth/login",
+            200,
+            data={"email": "admin@example.com", "password": "password123"}
+        )
+        if success and 'access_token' in response:
+            self.admin_token = response['access_token']
+            logging.info(f"Admin login successful with alternative credentials")
+            return True
+            
         return False
 
     def test_get_initial_config(self):
