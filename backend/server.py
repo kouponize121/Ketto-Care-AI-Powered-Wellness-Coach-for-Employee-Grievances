@@ -1361,41 +1361,49 @@ async def save_gpt_config(config: GPTConfigModel, current_user: User = Depends(g
         load_openai_config()
         raise HTTPException(status_code=400, detail=f"Invalid API key: {str(e)}")
 
-@api_router.get("/admin/gpt-config")
-async def get_gpt_config(current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
-    """Get current OpenAI API key configuration"""
+@api_router.post("/admin/test-gpt-config")
+async def test_current_gpt_config(current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+    """Test the current OpenAI API key configuration"""
     try:
+        # Reload configuration to ensure we have the latest
+        current_key = get_current_openai_key()
+        
+        if not current_key:
+            return {
+                "success": False,
+                "message": "No OpenAI API key configured",
+                "status": "not_configured"
+            }
+        
+        # Test the API key
+        test_response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, this is a configuration test."}],
+            max_tokens=10
+        )
+        
+        # Update last tested time in database
         config = db.query(GPTConfig).filter(GPTConfig.is_active == True).first()
         if config:
-            logging.info(f"📋 Retrieved GPT config from database (ends with: ...{config.api_key[-8:]})")
-            return {
-                "api_key": config.api_key[:10] + "..." if len(config.api_key) > 10 else config.api_key,
-                "is_active": config.is_active,
-                "last_tested_at": config.last_tested_at.isoformat() if config.last_tested_at else None,
-                "status": "configured"
-            }
-        else:
-            # Check if there's an environment variable
-            env_key = os.environ.get('OPENAI_API_KEY')
-            if env_key:
-                logging.info("📋 No database config found, but environment variable exists")
-                return {
-                    "api_key": env_key[:10] + "..." if len(env_key) > 10 else env_key,
-                    "is_active": True,
-                    "last_tested_at": None,
-                    "status": "environment_variable"
-                }
-            else:
-                logging.warning("📋 No OpenAI configuration found")
-                return {
-                    "status": "not_configured",
-                    "message": "No OpenAI API key configured"
-                }
-    except Exception as e:
-        logging.error(f"❌ Error retrieving GPT config: {str(e)}")
+            config.last_tested_at = datetime.utcnow()
+            db.commit()
+        
+        logging.info("✅ OpenAI API key test successful")
+        
         return {
-            "status": "error",
-            "message": f"Error retrieving configuration: {str(e)}"
+            "success": True,
+            "message": "OpenAI API key is working correctly",
+            "status": "working",
+            "test_response": test_response.choices[0].message.content if test_response.choices else "No response",
+            "api_key_preview": current_key[:10] + "..." if len(current_key) > 10 else current_key
+        }
+        
+    except Exception as e:
+        logging.error(f"❌ OpenAI API key test failed: {str(e)}")
+        return {
+            "success": False,
+            "message": f"OpenAI API key test failed: {str(e)}",
+            "status": "failed"
         }
 
 # Email Recipients Management
