@@ -68,11 +68,8 @@ class OpenAIConfigTester:
         """Test admin initialization"""
         return self.run_test("Initialize Admin", "POST", "api/init-admin", 200)
 
-    def test_admin_login(self, email="admin@ketto.org", password="admin123"):
+    def test_admin_login(self, email="testadmin@example.com", password="password123"):
         """Test admin login"""
-        # First try to initialize admin
-        self.test_init_admin()
-        
         success, response = self.run_test(
             "Admin Login",
             "POST",
@@ -92,7 +89,7 @@ class OpenAIConfigTester:
             "POST",
             "api/auth/login",
             200,
-            data={"email": "admin@example.com", "password": "password123"}
+            data={"email": "admin@ketto.org", "password": "admin123"}
         )
         if success and 'access_token' in response:
             self.admin_token = response['access_token']
