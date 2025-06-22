@@ -709,7 +709,7 @@ async def send_email_notification(ticket: Ticket, user: User, db: Session, notif
         server.starttls()
         server.login(email_config.smtp_username, email_config.smtp_password)
         
-        all_recipients = to_recipients + template_data["cc_recipients"] + template_data["bcc_recipients"]
+        all_recipients = to_recipients + cc_recipients + template_data["bcc_recipients"]
         server.sendmail(email_config.smtp_username, all_recipients, msg.as_string())
         server.quit()
         
