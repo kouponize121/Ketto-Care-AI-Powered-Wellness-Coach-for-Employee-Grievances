@@ -1,5 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
@@ -133,10 +135,49 @@ class AIConversation(Base):
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-# OpenAI setup
-openai_api_key = os.environ.get('OPENAI_API_KEY')
-if openai_api_key:
-    openai.api_key = openai_api_key
+# Function to load OpenAI API key from database or environment
+def load_openai_config():
+    """Load OpenAI API key from database first, then fallback to environment variable"""
+    try:
+        db = SessionLocal()
+        try:
+            config = db.query(GPTConfig).filter(GPTConfig.is_active == True).first()
+            
+            if config and config.api_key:
+                openai.api_key = config.api_key
+                logging.info(f"✅ OpenAI API key loaded from database configuration (ends with: ...{config.api_key[-8:]})")
+                return config.api_key
+            else:
+                # Fallback to environment variable
+                openai_api_key = os.environ.get('OPENAI_API_KEY')
+                if openai_api_key:
+                    openai.api_key = openai_api_key
+                    logging.info("✅ OpenAI API key loaded from environment variable")
+                    return openai_api_key
+                else:
+                    logging.warning("⚠️ No OpenAI API key found in database or environment")
+                    return None
+        finally:
+            db.close()
+    except Exception as e:
+        logging.error(f"❌ Error loading OpenAI config: {str(e)}")
+        # Fallback to environment variable
+        openai_api_key = os.environ.get('OPENAI_API_KEY')
+        if openai_api_key:
+            openai.api_key = openai_api_key
+            logging.info("✅ OpenAI API key loaded from environment variable (fallback)")
+        return openai_api_key
+
+# Function to get current API key
+def get_current_openai_key():
+    """Get the current OpenAI API key, loading from database if not set"""
+    if not openai.api_key:
+        load_openai_config()
+    return openai.api_key
+
+# Initialize OpenAI configuration
+logging.info("🔧 Initializing OpenAI configuration...")
+load_openai_config()
 
 # Security setup
 security = HTTPBearer()
@@ -146,6 +187,19 @@ JWT_SECRET = os.environ.get('JWT_SECRET_KEY', 'your-secret-key')
 # Create the main app
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
+
+# Startup event to load OpenAI configuration
+@app.on_event("startup")
+async def startup_event():
+    """Load configuration on app startup"""
+    logging.info("🚀 Starting Ketto Care application...")
+    logging.info("🔧 Loading OpenAI configuration on startup...")
+    api_key = load_openai_config()
+    if api_key:
+        logging.info("✅ OpenAI configuration loaded successfully on startup")
+    else:
+        logging.warning("⚠️ No OpenAI API key available on startup")
+    logging.info("🎉 Ketto Care application started successfully")
 
 # Dependency to get DB session
 def get_db():
@@ -226,6 +280,18 @@ class EmailRecipientsUpdateModel(BaseModel):
 class CsvUploadModel(BaseModel):
     file_content: str  # Base64 encoded CSV content
 
+class FAQRequest(BaseModel):
+    question_type: str
+    user_id: str
+    additional_info: Optional[str] = None
+
+class FAQResponse(BaseModel):
+    response: str
+    requires_followup: bool = False
+    ticket_created: bool = False
+    ticket_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+
 # Helper functions
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -262,6 +328,20 @@ async def get_admin_user(current_user: User = Depends(get_current_user)):
 async def chat_with_ai(message: str, user_id: str, db: Session) -> dict:
     """Process chat with CareAI and determine if ticket creation is needed"""
     try:
+        # Ensure OpenAI API key is loaded
+        current_key = get_current_openai_key()
+        if not current_key:
+            logging.error("❌ No OpenAI API key available for chat")
+            return {
+                "response": "I apologize, but I'm experiencing technical difficulties. Please contact your administrator to configure the AI system.",
+                "escalate": True,
+                "category": "request",
+                "severity": "medium",
+                "summary": "Technical support needed - AI system not configured",
+                "show_resolution_buttons": False,
+                "conversation_id": None
+            }
+        
         # Get user info for context
         user = db.query(User).filter(User.id == user_id).first()
         user_name = user.name if user else "User"
@@ -532,6 +612,319 @@ Be empathetic but move to helpful solutions quickly. Don't get stuck in endless 
             "summary": "Technical support needed - AI assistant unavailable"
         }
 
+async def handle_faq_question(question_type: str, user_id: str, additional_info: str, db: Session) -> dict:
+    """Handle predefined FAQ questions with specific logic"""
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        user_name = user.name if user else "User"
+        user_email = user.email if user else ""
+        
+        response = ""
+        requires_followup = False
+        ticket_created = False
+        ticket_id = None
+        
+        if question_type == "payslip_request":
+            if not additional_info:
+                response = """Have you tried checking your payslip in KEKA?
+Go to My Finances → My Pay → Pay Slips, where you can view and download all your payslips.
+
+For now, please let me know the specific month for which you need the payslip. I'll go ahead and raise a request with the admin team to help you out."""
+                requires_followup = True
+            else:
+                # Create ticket for payslip request
+                ticket = Ticket(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    category="request",
+                    summary=f"Payslip request for {additional_info}",
+                    description=f"Employee {user_name} has requested payslip for {additional_info}. Please provide the payslip through appropriate channels.",
+                    severity="low",
+                    status="open"
+                )
+                db.add(ticket)
+                db.commit()
+                db.refresh(ticket)
+                ticket_id = ticket.id
+                ticket_created = True
+                response = f"Thank you! I've forwarded your payslip request for {additional_info} to the admin team. They will get back to you soon."
+                
+                # Send email notification
+                await send_email_notification(ticket, user, db, "ticket_created")
+        
+        elif question_type == "incentive_pending":
+            if not additional_info:
+                response = """I understand this can be concerning. Could you please specify what type of incentive is pending?
+Is it a Goodie, Daily Cash Voucher, or Monthly Incentive?
+Also, let me know for which month it's pending."""
+                requires_followup = True
+            else:
+                # Parse additional info to determine if ticket needed
+                info_lower = additional_info.lower()
+                current_month = datetime.now().strftime("%B %Y").lower()
+                
+                response = """Please note: except for goodies, monthly and daily cash incentives follow a delayed cycle. For example, incentives earned in the current month are calculated by the 15th of the next month, sent to finance afterward, and are finally paid along with the salary of the following month.
+
+"""
+                
+                if current_month in info_lower:
+                    response += "Since this is for the current month, please wait for the normal processing cycle to complete."
+                else:
+                    # Create ticket for previous months
+                    ticket = Ticket(
+                        id=str(uuid.uuid4()),
+                        user_id=user_id,
+                        category="request",
+                        summary=f"Pending incentive inquiry: {additional_info}",
+                        description=f"Employee {user_name} is inquiring about pending incentive: {additional_info}",
+                        severity="medium",
+                        status="open"
+                    )
+                    db.add(ticket)
+                    db.commit()
+                    db.refresh(ticket)
+                    ticket_id = ticket.id
+                    ticket_created = True
+                    response += "I've forwarded your inquiry to the admin team for review."
+                    
+                    # Send email notification
+                    await send_email_notification(ticket, user, db, "ticket_created")
+        
+        elif question_type == "shift_extension":
+            if not additional_info:
+                response = """I hear you, and I understand that shift extensions can impact your work-life balance.
+Please check the APR report shared by the MIS team daily — look for the column titled 'Productive Hours', which excludes break time. Ideally, this should reflect at least 8 hours of productive work.
+
+Sometimes, shift extensions happen when overall productivity targets are not met. Could you let me know what productive hours are shown in your report?"""
+                requires_followup = True
+            else:
+                info_lower = additional_info.lower()
+                if "don't know" in info_lower or "dont know" in info_lower:
+                    # Create ticket
+                    ticket = Ticket(
+                        id=str(uuid.uuid4()),
+                        user_id=user_id,
+                        category="request",
+                        summary="Shift extension inquiry - needs APR review",
+                        description=f"Employee {user_name} is facing shift extension issues and needs help with APR report analysis. Details: {additional_info}",
+                        severity="medium",
+                        status="open"
+                    )
+                    db.add(ticket)
+                    db.commit()
+                    db.refresh(ticket)
+                    ticket_id = ticket.id
+                    ticket_created = True
+                    response = "Thank you for the details. I've forwarded your request to the relevant team to look into this further."
+                    
+                    # Send email notification
+                    await send_email_notification(ticket, user, db, "ticket_created")
+                else:
+                    try:
+                        # Try to extract hours from the response
+                        hours = float(''.join(filter(str.isdigit, additional_info.split()[0])))
+                        if hours <= 8:
+                            response = "You're doing well! 8 productive hours is our benchmark — great job, and thank you for your efforts."
+                        else:
+                            # Create ticket for high hours
+                            ticket = Ticket(
+                                id=str(uuid.uuid4()),
+                                user_id=user_id,
+                                category="request",
+                                summary=f"Shift extension concern - {hours} productive hours reported",
+                                description=f"Employee {user_name} reported {hours} productive hours and is concerned about shift extensions. Details: {additional_info}",
+                                severity="medium",
+                                status="open"
+                            )
+                            db.add(ticket)
+                            db.commit()
+                            db.refresh(ticket)
+                            ticket_id = ticket.id
+                            ticket_created = True
+                            response = "Thank you for the details. I've forwarded your request to the relevant team to look into this further."
+                            
+                            # Send email notification
+                            await send_email_notification(ticket, user, db, "ticket_created")
+                    except:
+                        # If can't parse hours, create ticket
+                        ticket = Ticket(
+                            id=str(uuid.uuid4()),
+                            user_id=user_id,
+                            category="request",
+                            summary="Shift extension inquiry",
+                            description=f"Employee {user_name} is facing shift extension issues. Details: {additional_info}",
+                            severity="medium",
+                            status="open"
+                        )
+                        db.add(ticket)
+                        db.commit()
+                        db.refresh(ticket)
+                        ticket_id = ticket.id
+                        ticket_created = True
+                        response = "Thank you for the details. I've forwarded your request to the relevant team to look into this further."
+                        
+                        # Send email notification
+                        await send_email_notification(ticket, user, db, "ticket_created")
+        
+        elif question_type == "admin_issue":
+            if not additional_info:
+                response = "Sorry you're facing this issue. Could you please share some details so I can help?"
+                requires_followup = True
+            else:
+                # Create ticket immediately
+                ticket = Ticket(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    category="request",
+                    summary="Admin-related issue",
+                    description=f"Admin issue reported by {user_name}: {additional_info}",
+                    severity="medium",
+                    status="open"
+                )
+                db.add(ticket)
+                db.commit()
+                db.refresh(ticket)
+                ticket_id = ticket.id
+                ticket_created = True
+                response = "Thank you for sharing the details. I've created a ticket and forwarded this to the admin team for immediate attention."
+                
+                # Send email notification
+                await send_email_notification(ticket, user, db, "ticket_created")
+        
+        elif question_type == "attendance_query":
+            if not additional_info:
+                response = "Could you please specify what exactly is the issue with your attendance?"
+                requires_followup = True
+            else:
+                # Create ticket immediately
+                ticket = Ticket(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    category="request",
+                    summary="Attendance query",
+                    description=f"Attendance issue reported by {user_name}: {additional_info}",
+                    severity="medium",
+                    status="open"
+                )
+                db.add(ticket)
+                db.commit()
+                db.refresh(ticket)
+                ticket_id = ticket.id
+                ticket_created = True
+                response = "Thank you for providing the details. I've created a ticket for your attendance query and forwarded it to the appropriate team."
+                
+                # Send email notification
+                await send_email_notification(ticket, user, db, "ticket_created")
+        
+        elif question_type == "no_break":
+            if not additional_info:
+                response = "I'm sorry to hear that. Could you let me know more about the situation? Did you not get a break today? If yes, since when?"
+                requires_followup = True
+            else:
+                info_lower = additional_info.lower()
+                if "today" in info_lower or "no break today" in info_lower:
+                    # Create ticket immediately for today's issue
+                    ticket = Ticket(
+                        id=str(uuid.uuid4()),
+                        user_id=user_id,
+                        category="grievance",
+                        summary="No break issue - immediate attention required",
+                        description=f"Employee {user_name} did not get a break today. Details: {additional_info}",
+                        severity="high",
+                        status="open"
+                    )
+                    db.add(ticket)
+                    db.commit()
+                    db.refresh(ticket)
+                    ticket_id = ticket.id
+                    ticket_created = True
+                    response = "I'm sorry to hear about this situation. I've immediately escalated this to the management team for urgent attention."
+                    
+                    # Send email notification
+                    await send_email_notification(ticket, user, db, "ticket_created")
+                else:
+                    response = "Thanks for sharing. I recommend discussing this directly with your team leader or manager so they can look into it for you."
+        
+        elif question_type == "parking_issue":
+            if not additional_info:
+                response = "Could you please explain what issue you're facing with parking?"
+                requires_followup = True
+            else:
+                # Create ticket immediately
+                ticket = Ticket(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    category="request",
+                    summary="Parking issue",
+                    description=f"Parking issue reported by {user_name}: {additional_info}",
+                    severity="low",
+                    status="open"
+                )
+                db.add(ticket)
+                db.commit()
+                db.refresh(ticket)
+                ticket_id = ticket.id
+                ticket_created = True
+                response = "Thank you for reporting the parking issue. I've created a ticket and forwarded this to the facilities team."
+                
+                # Send email notification
+                await send_email_notification(ticket, user, db, "ticket_created")
+        
+        elif question_type == "misbehaviour":
+            # Create ticket immediately with high priority
+            ticket = Ticket(
+                id=str(uuid.uuid4()),
+                user_id=user_id,
+                category="grievance",
+                summary="Misbehaviour complaint - urgent attention required",
+                description=f"Misbehaviour complaint from {user_name}: {additional_info or 'Details to be provided'}",
+                severity="critical",
+                status="open"
+            )
+            db.add(ticket)
+            db.commit()
+            db.refresh(ticket)
+            ticket_id = ticket.id
+            ticket_created = True
+            response = "I'm really sorry to hear that. We take these concerns very seriously. I'll go ahead and raise a ticket immediately and ensure this is escalated to the appropriate team."
+            
+            # Send email notification
+            await send_email_notification(ticket, user, db, "ticket_created")
+        
+        else:
+            response = "I'm sorry, I didn't understand that question type. Please try selecting from the available options or ask me directly."
+        
+        # Create AI conversation record for FAQ
+        ai_conversation = AIConversation(
+            user_id=user_id,
+            conversation_summary=f"FAQ: {question_type}",
+            initial_concern=f"FAQ Question: {question_type}",
+            ai_solution_provided=response,
+            resolution_status="resolved" if not requires_followup else "pending",
+            follow_up_needed=requires_followup
+        )
+        db.add(ai_conversation)
+        db.commit()
+        db.refresh(ai_conversation)
+        
+        return {
+            "response": response,
+            "requires_followup": requires_followup,
+            "ticket_created": ticket_created,
+            "ticket_id": ticket_id,
+            "conversation_id": ai_conversation.id
+        }
+        
+    except Exception as e:
+        logging.error(f"Error handling FAQ question: {str(e)}")
+        return {
+            "response": "I apologize, but I'm experiencing technical difficulties. Please try again or contact support directly.",
+            "requires_followup": False,
+            "ticket_created": False,
+            "ticket_id": None,
+            "conversation_id": None
+        }
+
 async def send_email_notification(ticket: Ticket, user: User, db: Session, notification_type: str = "ticket_created"):
     """Send email notification for ticket events using templates"""
     try:
@@ -641,7 +1034,7 @@ async def send_email_notification(ticket: Ticket, user: User, db: Session, notif
         server.starttls()
         server.login(email_config.smtp_username, email_config.smtp_password)
         
-        all_recipients = to_recipients + template_data["cc_recipients"] + template_data["bcc_recipients"]
+        all_recipients = to_recipients + cc_recipients + template_data["bcc_recipients"]
         server.sendmail(email_config.smtp_username, all_recipients, msg.as_string())
         server.quit()
         
@@ -900,6 +1293,81 @@ async def chat_with_careai(chat_request: ChatRequest, current_user: User = Depen
         "show_resolution_buttons": ai_result.get('show_resolution_buttons', False),
         "conversation_id": ai_result.get('conversation_id')
     }
+
+@api_router.post("/faq")
+async def handle_faq(faq_request: FAQRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Handle FAQ questions with predefined responses"""
+    try:
+        result = await handle_faq_question(
+            faq_request.question_type, 
+            faq_request.user_id, 
+            faq_request.additional_info or "", 
+            db
+        )
+        
+        # Log FAQ interaction for debugging
+        logging.info(f"FAQ - Question: {faq_request.question_type}, User: {faq_request.user_id}")
+        logging.info(f"FAQ - Result: ticket_created={result['ticket_created']}, requires_followup={result['requires_followup']}")
+        
+        return {
+            "response": result['response'],
+            "requires_followup": result['requires_followup'],
+            "ticket_created": result['ticket_created'],
+            "ticket_id": result['ticket_id'],
+            "conversation_id": result['conversation_id']
+        }
+        
+    except Exception as e:
+        logging.error(f"Error in FAQ endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@api_router.get("/faq/questions")
+async def get_faq_questions():
+    """Get list of available FAQ questions"""
+    faq_questions = [
+        {
+            "id": "payslip_request",
+            "title": "Request for Payslip",
+            "description": "Need help getting your payslip from KEKA or requesting it from admin"
+        },
+        {
+            "id": "incentive_pending", 
+            "title": "Incentive Pending",
+            "description": "Questions about pending goodies, daily cash vouchers, or monthly incentives"
+        },
+        {
+            "id": "shift_extension",
+            "title": "Shift Extension",
+            "description": "Concerns about working beyond scheduled hours"
+        },
+        {
+            "id": "admin_issue",
+            "title": "Admin Issue", 
+            "description": "Any issues that need admin attention"
+        },
+        {
+            "id": "attendance_query",
+            "title": "Attendance Query",
+            "description": "Questions or issues related to your attendance record"
+        },
+        {
+            "id": "no_break",
+            "title": "No Break",
+            "description": "Report if you couldn't take your scheduled break"
+        },
+        {
+            "id": "parking_issue",
+            "title": "Parking Issue",
+            "description": "Problems with parking facilities or availability"
+        },
+        {
+            "id": "misbehaviour",
+            "title": "Misbehaviour",
+            "description": "Report any inappropriate behavior or harassment (handled with highest priority)"
+        }
+    ]
+    
+    return {"questions": faq_questions}
 
 # Ticket routes
 @api_router.get("/tickets")
@@ -1246,18 +1714,24 @@ async def get_email_config(current_user: User = Depends(get_admin_user), db: Ses
 
 @api_router.post("/admin/gpt-config")
 async def save_gpt_config(config: GPTConfigModel, current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
-    openai.api_key = config.api_key
-    
-    # Test the API key
+    """Save and test OpenAI API key configuration"""
     try:
+        # Set the API key for immediate testing
+        openai.api_key = config.api_key
+        logging.info(f"🔧 Testing new OpenAI API key (ends with: ...{config.api_key[-8:]})")
+        
+        # Test the API key
         test_response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello, this is a test."}],
             max_tokens=10
         )
         
+        logging.info("✅ OpenAI API key test successful")
+        
         # Delete existing config
-        db.query(GPTConfig).delete()
+        deleted_count = db.query(GPTConfig).delete()
+        logging.info(f"🗑️ Deleted {deleted_count} existing GPT configurations")
         
         # Create new config
         gpt_config = GPTConfig(
@@ -1267,21 +1741,107 @@ async def save_gpt_config(config: GPTConfigModel, current_user: User = Depends(g
         )
         db.add(gpt_config)
         db.commit()
+        db.refresh(gpt_config)
         
-        return {"message": "GPT configuration saved and tested successfully"}
+        logging.info(f"💾 OpenAI API key saved to database with ID: {gpt_config.id}")
+        
+        # Verify the key was saved by reloading
+        load_openai_config()
+        
+        return {
+            "message": "GPT configuration saved and tested successfully",
+            "api_key_preview": config.api_key[:10] + "..." if len(config.api_key) > 10 else config.api_key,
+            "is_active": True,
+            "last_tested_at": gpt_config.last_tested_at.isoformat()
+        }
+        
     except Exception as e:
+        logging.error(f"❌ Failed to save/test OpenAI API key: {str(e)}")
+        # Restore previous configuration if possible
+        load_openai_config()
         raise HTTPException(status_code=400, detail=f"Invalid API key: {str(e)}")
 
 @api_router.get("/admin/gpt-config")
 async def get_gpt_config(current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
-    config = db.query(GPTConfig).first()
-    if config:
+    """Get current OpenAI API key configuration"""
+    try:
+        config = db.query(GPTConfig).filter(GPTConfig.is_active == True).first()
+        if config:
+            logging.info(f"📋 Retrieved GPT config from database (ends with: ...{config.api_key[-8:]})")
+            return {
+                "api_key": config.api_key[:10] + "..." if len(config.api_key) > 10 else config.api_key,
+                "is_active": config.is_active,
+                "last_tested_at": config.last_tested_at.isoformat() if config.last_tested_at else None,
+                "status": "configured"
+            }
+        else:
+            # Check if there's an environment variable
+            env_key = os.environ.get('OPENAI_API_KEY')
+            if env_key:
+                logging.info("📋 No database config found, but environment variable exists")
+                return {
+                    "api_key": env_key[:10] + "..." if len(env_key) > 10 else env_key,
+                    "is_active": True,
+                    "last_tested_at": None,
+                    "status": "environment_variable"
+                }
+            else:
+                logging.warning("📋 No OpenAI configuration found")
+                return {
+                    "status": "not_configured",
+                    "message": "No OpenAI API key configured"
+                }
+    except Exception as e:
+        logging.error(f"❌ Error retrieving GPT config: {str(e)}")
         return {
-            "api_key": config.api_key[:10] + "..." if len(config.api_key) > 10 else config.api_key,
-            "is_active": config.is_active,
-            "last_tested_at": config.last_tested_at.isoformat() if config.last_tested_at else None
+            "status": "error",
+            "message": f"Error retrieving configuration: {str(e)}"
         }
-    return {}
+
+@api_router.post("/admin/test-gpt-config")
+async def test_current_gpt_config(current_user: User = Depends(get_admin_user), db: Session = Depends(get_db)):
+    """Test the current OpenAI API key configuration"""
+    try:
+        # Reload configuration to ensure we have the latest
+        current_key = get_current_openai_key()
+        
+        if not current_key:
+            return {
+                "success": False,
+                "message": "No OpenAI API key configured",
+                "status": "not_configured"
+            }
+        
+        # Test the API key
+        test_response = openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "Hello, this is a configuration test."}],
+            max_tokens=10
+        )
+        
+        # Update last tested time in database
+        config = db.query(GPTConfig).filter(GPTConfig.is_active == True).first()
+        if config:
+            config.last_tested_at = datetime.utcnow()
+            db.commit()
+        
+        logging.info("✅ OpenAI API key test successful")
+        
+        return {
+            "success": True,
+            "message": "OpenAI API key is working correctly",
+            "status": "working",
+            "test_response": test_response.choices[0].message.content if test_response.choices else "No response",
+            "api_key_preview": current_key[:10] + "..." if len(current_key) > 10 else current_key
+        }
+        
+    except Exception as e:
+        logging.error(f"❌ OpenAI API key test failed: {str(e)}")
+        return {
+            "success": False,
+            "message": f"OpenAI API key test failed: {str(e)}",
+            "status": "failed"
+        }
 
 # Email Recipients Management
 @api_router.get("/admin/email-recipients")
@@ -1402,6 +1962,36 @@ async def root():
 
 # Include the router in the main app
 app.include_router(api_router)
+
+# Static files and frontend serving for production deployment
+static_dir = Path(__file__).parent.parent / "frontend" / "build"
+if static_dir.exists():
+    # Mount static files
+    app.mount("/static", StaticFiles(directory=static_dir / "static"), name="static")
+    
+    # Serve frontend for all non-API routes
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        # If it's an API call, let it go to the API router (this shouldn't happen due to mounting order)
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="API endpoint not found")
+        
+        # For all other paths, serve the React app
+        index_file = static_dir / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not built")
+else:
+    # Fallback for development or when frontend is not built
+    @app.get("/")
+    async def root():
+        return {
+            "message": "Ketto Care API is running", 
+            "version": "1.0.0", 
+            "status": "healthy",
+            "note": "Frontend not found. For production, build the React frontend first."
+        }
 
 app.add_middleware(
     CORSMiddleware,

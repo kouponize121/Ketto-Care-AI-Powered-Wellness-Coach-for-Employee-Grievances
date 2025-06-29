@@ -1,7 +1,7 @@
 import requests
 import json
 
-base_url = "https://f260db41-e692-4f6c-aedc-6884036a152a.preview.emergentagent.com"
+base_url = "https://cfe17b23-6636-463b-a02a-fcb4a5219b29.preview.emergentagent.com"
 
 # Login as admin to check tickets
 admin_login = {"email": "admin@ketto.org", "password": "admin123"}

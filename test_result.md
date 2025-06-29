@@ -102,7 +102,7 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
-## user_problem_statement: "Fix the resolution buttons issue in Ketto Care system - show_resolution_buttons not appearing in API response, preventing full escalation workflow testing"
+## user_problem_statement: "Add most asked question section from wherein user can select the most asked questions make sure other all thinks are working properly. Please place is properly without impacting current design. The 8 predefined questions are: 1. Request for Payslip, 2. Incentive Pending, 3. Shift Extension, 4. Admin Issue, 5. Attendance Query, 6. No Break, 7. Parking Issue, 8. Misbehaviour - each with specific response logic and ticket creation rules."
 
 ## backend:
   - task: "CareAI Chat Processing"
@@ -111,23 +111,29 @@
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: true
         agent: "main"
         comment: "Backend logic for show_resolution_buttons is properly implemented in chat_with_ai function (lines 476-523). Resolution endpoint exists at /chat/resolution. Need to test if buttons appear correctly."
+      - working: true
+        agent: "testing"
+        comment: "Tested the chat functionality with the OpenAI API key. The chat_with_ai function correctly processes messages and returns responses."
 
   - task: "Resolution Buttons Logic"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: "NA"
         agent: "main"
         comment: "Complex logic in place to determine when to show resolution buttons based on solution indicators, numbered lists, and question detection. Need to verify if this logic works correctly in practice."
+      - working: true
+        agent: "testing"
+        comment: "Tested the resolution buttons logic. The system correctly determines when to show resolution buttons based on the AI response content."
 
   - task: "Resolution Endpoint"
     implemented: true
@@ -135,11 +141,41 @@
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
       - working: true
         agent: "main"
         comment: "Resolution endpoint at /chat/resolution properly handles 'helpful' and 'need_help' responses, creates tickets for escalation."
+      - working: true
+        agent: "testing"
+        comment: "Verified that the resolution endpoint works correctly. It properly handles both 'helpful' and 'need_help' responses."
+
+  - task: "OpenAI API Key Persistence"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "Tested the enhanced OpenAI API key persistence system. The load_openai_config() function correctly loads the API key from the database. The get_current_openai_key() helper function works as expected. The FastAPI startup event handler successfully loads the configuration on app startup. The get_gpt_config() endpoint returns detailed status information. The test-gpt-config endpoint correctly tests the API key configuration. The API key persists after server restart."
+
+  - task: "FAQ System Backend"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Implemented complete FAQ system with handle_faq_question function and 2 API endpoints: /api/faq (POST) for handling FAQ responses and /api/faq/questions (GET) for getting available questions. All 8 predefined questions implemented with specific logic: Payslip Request, Incentive Pending, Shift Extension, Admin Issue, Attendance Query, No Break, Parking Issue, and Misbehaviour. Each has proper ticket creation rules and conditional logic."
+      - working: true
+        agent: "testing"
+        comment: "Fixed issue with Ticket model fields in handle_faq_question function. Tested all FAQ endpoints and verified they work correctly. GET /api/faq/questions returns all 8 predefined questions with proper structure. POST /api/faq correctly handles different question types with appropriate logic: payslip_request without additional_info requires followup, payslip_request with additional_info creates ticket, incentive_pending without additional_info requires followup, misbehaviour creates critical ticket immediately, no_break with 'today' creates high priority ticket, and shift_extension with hours > 8 creates ticket."
 
 ## frontend:
   - task: "Resolution Buttons UI"
@@ -166,6 +202,18 @@
         agent: "main"
         comment: "Chat interface captures show_resolution_buttons from API and stores in message object. Need to verify complete workflow."
 
+  - task: "FAQ UI Implementation"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/App.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Added complete FAQ UI with toggle button, grid layout of 8 predefined questions, followup input system, and proper integration with existing chat flow. Added state management (showFAQ, faqQuestions, selectedFAQ, faqFollowupInput) and functions (loadFAQQuestions, handleFAQSelection, handleFAQFollowup). UI placed before message input without impacting current design."
+
 ## metadata:
   created_by: "main_agent"
   version: "1.0"
@@ -174,13 +222,16 @@
 
 ## test_plan:
   current_focus:
-    - "CareAI Chat Processing"
-    - "Resolution Buttons Logic"
+    - "FAQ System Backend"
+    - "FAQ UI Implementation"
     - "Resolution Buttons UI"
+    - "Chat Interface Integration"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 ## agent_communication:
   - agent: "main"
-    message: "System analysis complete. Backend and frontend code for resolution buttons appears correct. Need to test if the complex logic for determining when to show buttons works properly. Dependencies installed and services restarted successfully."
+    message: "Successfully implemented complete FAQ system with 8 predefined questions. Backend includes handle_faq_question function with specific logic for each question type and proper ticket creation rules. Frontend adds FAQ toggle button, question grid, and followup input system. Fixed missing dependencies (httpx, distro) that were preventing backend startup. Ready for testing."
+  - agent: "testing"
+    message: "Tested the FAQ System Backend and found an issue with the Ticket model fields in the handle_faq_question function. Fixed the issue by removing user_name and user_email fields from Ticket creation as they don't exist in the Ticket model. After fixing, all FAQ endpoints work correctly. GET /api/faq/questions returns all 8 predefined questions with proper structure. POST /api/faq correctly handles different question types with appropriate logic for each scenario. All tests are now passing."

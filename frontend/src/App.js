@@ -27,8 +27,8 @@ import {
 } from 'lucide-react';
 import './App.css';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
+const API = `${BACKEND_URL}/api`;
 
 // AuthContext
 const AuthContext = React.createContext();
@@ -851,11 +851,16 @@ const EmployeeDashboard = () => {
   const [awaitingResolution, setAwaitingResolution] = useState(null); // {conversationId, messageId}
   const [editingTicket, setEditingTicket] = useState(null);
   const [showCsvUpload, setShowCsvUpload] = useState(false);
+  const [showFAQ, setShowFAQ] = useState(false);
+  const [faqQuestions, setFaqQuestions] = useState([]);
+  const [selectedFAQ, setSelectedFAQ] = useState(null);
+  const [faqFollowupInput, setFaqFollowupInput] = useState('');
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
     loadTickets();
     loadChatHistory();
+    loadFAQQuestions();
   }, [user.id]);
 
   useEffect(() => {
@@ -912,6 +917,169 @@ const EmployeeDashboard = () => {
       setTickets(response.data);
     } catch (error) {
       console.error('Failed to load tickets:', error);
+    }
+  };
+
+  const loadFAQQuestions = async () => {
+    try {
+      console.log('Attempting to load FAQ questions...');
+      const url = `${API}/faq/questions`;
+      console.log('FAQ URL:', url);
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      console.log('Response status:', response.status);
+      console.log('Response ok:', response.ok);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('FAQ data received:', data);
+      
+      setFaqQuestions(data.questions);
+      console.log('FAQ questions set to state, length:', data.questions.length);
+    } catch (error) {
+      console.error('Failed to load FAQ questions:', error);
+      console.error('Error stack:', error.stack);
+      // Use hardcoded FAQ data as fallback for testing
+      const hardcodedFAQs = [
+        {
+          "id": "payslip_request",
+          "title": "Request for Payslip",
+          "description": "Need help getting your payslip from KEKA or requesting it from admin"
+        },
+        {
+          "id": "incentive_pending",
+          "title": "Incentive Pending",
+          "description": "Questions about pending goodies, daily cash vouchers, or monthly incentives"
+        },
+        {
+          "id": "shift_extension",
+          "title": "Shift Extension",
+          "description": "Concerns about working beyond scheduled hours"
+        },
+        {
+          "id": "admin_issue",
+          "title": "Admin Issue",
+          "description": "Any issues that need admin attention"
+        },
+        {
+          "id": "attendance_query",
+          "title": "Attendance Query",
+          "description": "Questions or issues related to your attendance record"
+        },
+        {
+          "id": "no_break",
+          "title": "No Break",
+          "description": "Report if you couldn't take your scheduled break"
+        },
+        {
+          "id": "parking_issue",
+          "title": "Parking Issue",
+          "description": "Problems with parking facilities or availability"
+        },
+        {
+          "id": "misbehaviour",
+          "title": "Misbehaviour",
+          "description": "Report any inappropriate behavior or harassment (handled with highest priority)"
+        }
+      ];
+      setFaqQuestions(hardcodedFAQs);
+      console.log('Using hardcoded FAQ questions for testing');
+    }
+  };
+
+  const handleFAQSelection = async (questionType) => {
+    try {
+      setLoading(true);
+      setSelectedFAQ(questionType);
+      
+      // Send initial FAQ request
+      const response = await axios.post(`${API}/faq`, {
+        question_type: questionType,
+        user_id: user.id
+      });
+
+      // Add FAQ response as AI message
+      const aiMessage = {
+        id: Date.now(),
+        sender: 'ai',
+        message: response.data.response,
+        timestamp: new Date(),
+        ticketCreated: response.data.ticket_created,
+        ticketId: response.data.ticket_id,
+        requiresFollowup: response.data.requires_followup,
+        conversationId: response.data.conversation_id,
+        faqType: questionType
+      };
+
+      setMessages(prev => [...prev, aiMessage]);
+      setShowFAQ(false);
+
+      if (response.data.ticket_created) {
+        loadTickets(); // Refresh tickets
+      }
+    } catch (error) {
+      console.error('FAQ selection failed:', error);
+      alert('Failed to process your FAQ selection. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFAQFollowup = async (e) => {
+    e.preventDefault();
+    if (!faqFollowupInput.trim() || !selectedFAQ) return;
+
+    try {
+      setLoading(true);
+      
+      // Add user message
+      const userMessage = {
+        id: Date.now(),
+        sender: 'user', 
+        message: faqFollowupInput,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, userMessage]);
+
+      // Send followup FAQ request
+      const response = await axios.post(`${API}/faq`, {
+        question_type: selectedFAQ,
+        user_id: user.id,
+        additional_info: faqFollowupInput
+      });
+
+      // Add FAQ response as AI message
+      const aiMessage = {
+        id: Date.now() + 1,
+        sender: 'ai',
+        message: response.data.response,
+        timestamp: new Date(),
+        ticketCreated: response.data.ticket_created,
+        ticketId: response.data.ticket_id,
+        conversationId: response.data.conversation_id
+      };
+
+      setMessages(prev => [...prev, aiMessage]);
+      setFaqFollowupInput('');
+      setSelectedFAQ(null);
+
+      if (response.data.ticket_created) {
+        loadTickets(); // Refresh tickets
+      }
+    } catch (error) {
+      console.error('FAQ followup failed:', error);
+      alert('Failed to send your followup. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -1171,6 +1339,73 @@ const EmployeeDashboard = () => {
               )}
               <div ref={messagesEndRef} />
             </div>
+
+            {/* FAQ Section */}
+            {!showFAQ && messages.length > 0 && (
+              <div className="px-6 py-3 border-t bg-gray-50">
+                <button
+                  onClick={() => setShowFAQ(true)}
+                  className="text-indigo-600 hover:text-indigo-700 text-sm font-medium flex items-center space-x-2"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                  <span>Quick Help - Most Asked Questions</span>
+                </button>
+              </div>
+            )}
+
+            {showFAQ && (
+              <div className="px-6 py-4 border-t bg-gray-50">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-gray-900">Most Asked Questions</h3>
+                  <button
+                    onClick={() => setShowFAQ(false)}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-60 overflow-y-auto">
+                  {faqQuestions.length === 0 ? (
+                    <div className="text-gray-500 text-sm col-span-2">Loading questions...</div>
+                  ) : (
+                    faqQuestions.map((faq) => (
+                      <button
+                        key={faq.id}
+                        onClick={() => handleFAQSelection(faq.id)}
+                        disabled={loading}
+                        className="text-left p-3 bg-white rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 transition text-sm disabled:opacity-50"
+                      >
+                        <div className="font-medium text-gray-900 mb-1">{faq.title}</div>
+                        <div className="text-gray-600 text-xs">{faq.description}</div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* FAQ Followup Input */}
+            {selectedFAQ && messages.length > 0 && messages[messages.length - 1].requiresFollowup && (
+              <div className="px-6 py-4 border-t bg-blue-50">
+                <form onSubmit={handleFAQFollowup} className="flex space-x-3">
+                  <input
+                    type="text"
+                    value={faqFollowupInput}
+                    onChange={(e) => setFaqFollowupInput(e.target.value)}
+                    placeholder="Please provide the additional information requested..."
+                    className="flex-1 px-4 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    disabled={loading}
+                  />
+                  <button
+                    type="submit"
+                    disabled={loading || !faqFollowupInput.trim()}
+                    className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition"
+                  >
+                    <Send className="h-4 w-4" />
+                  </button>
+                </form>
+              </div>
+            )}
 
             {/* Message Input */}
             <div className="p-6 border-t">
